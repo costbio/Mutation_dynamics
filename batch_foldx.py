@@ -57,6 +57,12 @@ def process_pdb(args):
         with open(list_file, "w") as f:
             f.write(foldx_mutation + ";\n")
 
+        fxout_file = os.path.join(output_dir, f"Dif_{mutation}.fxout")
+        # Skip if output already exists
+        if os.path.exists(fxout_file):
+            print(f"⏩ Skipping {base_model_name}, {mutation} (already predicted)")
+            continue
+
         subprocess.run([
             foldx_binary,
             "--command=BuildModel",
@@ -70,27 +76,9 @@ def process_pdb(args):
 
         time.sleep(0.5)
 
-        dif_files = glob.glob(os.path.join(output_dir, f"Dif_*{mutation}*.fxout"))
-        ddg_value = None
-        if dif_files:
-            with open(dif_files[0], "r") as f:
-                for line in f:
-                    parts = line.strip().split()
-                    if len(parts) >= 2:
-                        try:
-                            ddg_value = float(parts[1])
-                            print(f"✅ {base_model_name}, {mutation} → ΔΔG = {ddg_value}")
-                            break
-                        except:
-                            continue
-        else:
-            print(f"No file found: {base_model_name}, {mutation}")
-            ddg_value = None
-
-        results.append((idx, ddg_value))
     return results
 
-def run_foldx_and_update_excel(excel_path, pdb_model_dir, foldx_dir, foldx_output_dir, output_excel_path, max_workers=4):
+def run_foldx_parallel(excel_path, pdb_model_dir, foldx_dir, foldx_output_dir, max_workers=4):
     os.makedirs(foldx_output_dir, exist_ok=True)
     df = pd.read_excel(excel_path)
     foldx_binary = os.path.join(foldx_dir, "foldx_20251231")
@@ -106,41 +94,21 @@ def run_foldx_and_update_excel(excel_path, pdb_model_dir, foldx_dir, foldx_outpu
         for pdb_file in pdb_files:
             pdb_tasks.append((folder, pdb_model_dir, foldx_dir, foldx_output_dir, df, foldx_binary, rotabase_path, pdb_file))
 
-    ddg_values = []
-    max_errors = 20
-    error_count = 0
-
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(process_pdb, args) for args in pdb_tasks]
         for future in as_completed(futures):
             try:
-                results = future.result()
-                for idx, ddg in results:
-                    if ddg is None:
-                        error_count += 1
-                        if error_count >= max_errors:
-                            print("Error limit exceeded. Exiting.")
-                            df.to_excel(excel_path, index=False)
-                            return
-                    ddg_values.append((idx, ddg))
+                future.result()
             except Exception as e:
                 print(f"Parallel error: {e}")
 
-    df["DDG"] = [None] * len(df)
-    for idx, ddg in ddg_values:
-        df.at[idx, "DDG"] = ddg
-
-    df.to_excel(output_excel_path, index=False)
-    print(f"\n All ddG values were saved to '{output_excel_path}'.")
-
 # Kullanım
 if __name__ == "__main__":
-    run_foldx_and_update_excel(
+    run_foldx_parallel(
         excel_path="/home/begum/model_mutation_pairs.xlsx",
         pdb_model_dir="/home/begum/Fixed_pdb/fixedd3_cabs_output",
         foldx_dir="/home/begum/foldx5_1Mac_0/foldx__1Linux64_0",
         foldx_output_dir="/home/begum/Fixed_pdb/fixedd3_foldx_output",
-        output_excel_path="/home/begum/model_mutation_pairs_foldx.xlsx",
         max_workers=60  # Set your desired parallelism here
     )
 
